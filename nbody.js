@@ -4,21 +4,7 @@ import { EffectComposer } from "three/addons/postprocessing/EffectComposer.js";
 import { RenderPass } from "three/addons/postprocessing/RenderPass.js";
 import { UnrealBloomPass } from "three/addons/postprocessing/UnrealBloomPass.js";
 
-// =============================================================================
-// OPTIMIZATIONS APPLIED:
-// 1. Reduced star count from 100k to 50k (GPU perf)
-// 2. Reduced nebula sprites from 3090 to 1000 (major GPU savings)
-// 3. Object pooling for Vector3 allocations (GC reduction)
-// 4. Batched geometry updates with flags
-// 5. Reduced trail calculations (only when visible)
-// 6. Optimized force calculations (fewer sqrt calls)
-// 7. Cached material/geometry references
-// 8. Reduced physics substeps for presets
-// 9. Conditional rendering (frustum culling improvements)
-// 10. Debounced UI updates
-// =============================================================================
-
-// --- 1. ASSETS & STYLES ---
+// --- 1. ASSETS & OPTIMIZED STYLES ---
 const link = document.createElement("link");
 link.rel = "stylesheet";
 link.href =
@@ -28,9 +14,7 @@ document.head.appendChild(link);
 const style = document.createElement("style");
 style.innerHTML = `
     ::-webkit-scrollbar { width: 0px; background: transparent; }
-    .glass-panel { -ms-overflow-style: none; scrollbar-width: none; }
-    .glass-panel::-webkit-scrollbar { display: none; }
-
+    
     input[type=range] { -webkit-appearance: none; width: 80px; background: transparent; flex-shrink: 0; }
     input[type=range]:focus { outline: none; }
     input[type=range]::-webkit-slider-runnable-track { width: 100%; height: 4px; cursor: pointer; background: rgba(255, 255, 255, 0.2); border-radius: 2px; }
@@ -41,13 +25,32 @@ style.innerHTML = `
         background-size: 100% 3px, 3px 100%; pointer-events: none; position: fixed; top: 0; left: 0; width: 100vw; height: 100vh; z-index: 9999;
     }
     
+    /* GPU ACCELERATED GLASS PANEL */
     .glass-panel {
-        background: rgba(10, 12, 16, 0.85); backdrop-filter: blur(16px);
-        border: 1px solid rgba(255, 255, 255, 0.1); border-radius: 16px;
+        background: rgba(10, 12, 16, 0.85);
+        backdrop-filter: blur(12px);
+        -webkit-backdrop-filter: blur(12px);
+        border: 1px solid rgba(255, 255, 255, 0.1);
+        border-radius: 16px;
         box-shadow: 0 10px 40px rgba(0,0,0,0.6);
+        will-change: transform; 
+        transform: translateZ(0); 
     }
 
-    .btn-icon { position: relative; flex-shrink: 0; }
+    /* OPTIMIZED BUTTONS - Cheap transitions only */
+    .btn-icon { 
+        position: relative; flex-shrink: 0; 
+        transition: color 0.1s ease, border-color 0.1s ease, background 0.1s ease;
+        border: 1px solid transparent; 
+    }
+    
+    .btn-active {
+        border-color: #00ffff !important;
+        color: #00ffff !important;
+        background: rgba(0, 255, 255, 0.1) !important;
+        box-shadow: 0 0 15px rgba(0, 255, 255, 0.15); 
+    }
+
     .btn-icon:hover::after {
         content: attr(data-tooltip); position: absolute; bottom: 120%; left: 50%; transform: translateX(-50%);
         background: rgba(0, 0, 0, 0.9); color: #00ffff; padding: 6px 10px; font-size: 11px;
@@ -79,13 +82,12 @@ document.body.appendChild(crtDiv);
 // --- 2. CONFIG & STATE ---
 const G = 1.0;
 const DT = 0.015;
-const TRAIL_LENGTH = 800; // OPTIMIZED: Reduced from 1000
+const TRAIL_LENGTH = 800;
 const MAX_BODIES = 15;
 const LINK_THRESHOLD = 150.0;
 const IDLE_TIMEOUT = 4000;
 const THETA = 0.5;
 
-// OPTIMIZATION: Vector3 object pool to reduce GC pressure
 const vec3Pool = [];
 const VEC3_POOL_SIZE = 100;
 for (let i = 0; i < VEC3_POOL_SIZE; i++) vec3Pool.push(new THREE.Vector3());
@@ -117,9 +119,8 @@ let useRepulsion = false;
 let collisionCount = 0;
 let simTime = 0.0;
 let lastInputTime = Date.now();
-let frameCount = 0; // OPTIMIZATION: For throttling updates
+let frameCount = 0;
 
-// Performance tracking
 let fps = 60;
 let lastFrameTime = performance.now();
 let frameTimeBuffer = [];
@@ -205,7 +206,6 @@ window.addEventListener("touchstart", resetIdle);
 controls.addEventListener("start", resetIdle);
 
 // --- 4. ENVIRONMENT ---
-// OPTIMIZATION: Cached texture to avoid regeneration
 let circleTexture = null;
 function getCircleTexture() {
   if (circleTexture) return circleTexture;
@@ -221,9 +221,8 @@ function getCircleTexture() {
   return circleTexture;
 }
 
-// OPTIMIZED: Reduced star count from 100,000 to 50,000
 const starsGeo = new THREE.BufferGeometry();
-const starPos = new Float32Array(50000 * 3); // OPTIMIZED: 50% reduction
+const starPos = new Float32Array(50000 * 3);
 const starVec = new THREE.Vector3();
 for (let i = 0; i < 50000; i++) {
   starVec.randomDirection();
@@ -244,7 +243,6 @@ const starsMat = new THREE.PointsMaterial({
 });
 scene.add(new THREE.Points(starsGeo, starsMat));
 
-// NEBULA - OPTIMIZED: Drastically reduced sprite count
 let brushTexture = null;
 function getBrushTexture() {
   if (brushTexture) return brushTexture;
@@ -262,24 +260,22 @@ function getBrushTexture() {
   brushTexture = new THREE.CanvasTexture(canvas);
   return brushTexture;
 }
-
 const brushTex = getBrushTexture();
 const nebulaGroup = new THREE.Group();
 const NEBULA_COLORS = [0x2a0055, 0x550033, 0x002255, 0x553300, 0x005544];
 
-// OPTIMIZED: Reduced from 1500 to 400 background nebulas
 for (let i = 0; i < 400; i++) {
   const color = NEBULA_COLORS[Math.floor(Math.random() * NEBULA_COLORS.length)];
   const mat = new THREE.SpriteMaterial({
     map: brushTex,
     color: color,
     transparent: true,
-    opacity: 0.015, // Subtle background atmosphere
+    opacity: 0.015,
     blending: THREE.AdditiveBlending,
     depthWrite: false,
   });
   const cloud = new THREE.Sprite(mat);
-  const scale = 600 + Math.random() * 900; // Larger sprites
+  const scale = 600 + Math.random() * 900;
   cloud.scale.set(scale, scale, 1);
   const theta = Math.random() * Math.PI * 2;
   const phi = Math.acos(2 * Math.random() - 1);
@@ -292,8 +288,6 @@ for (let i = 0; i < 400; i++) {
   cloud.material.rotation = Math.random() * Math.PI;
   nebulaGroup.add(cloud);
 }
-
-// OPTIMIZED: Reduced clusters from 30 to 10, and sprites per cluster from 60 to 60 (total: 1800 -> 600)
 const clusterCenters = [];
 for (let i = 0; i < 10; i++) {
   const theta = Math.random() * Math.PI * 2;
@@ -315,12 +309,12 @@ clusterCenters.forEach((center) => {
       map: brushTex,
       color: regionColor,
       transparent: true,
-      opacity: 0.04, // Subtle clustered regions
+      opacity: 0.04,
       blending: THREE.AdditiveBlending,
       depthWrite: false,
     });
     const cloud = new THREE.Sprite(mat);
-    const scale = 700 + Math.random() * 1000; // Larger
+    const scale = 700 + Math.random() * 1000;
     cloud.scale.set(scale, scale, 1);
     const offset = new THREE.Vector3(
       (Math.random() - 0.5) * 1200,
@@ -334,7 +328,6 @@ clusterCenters.forEach((center) => {
 });
 scene.add(nebulaGroup);
 
-// Links & Octree Viz
 const linkGeo = new THREE.BufferGeometry();
 const linkPos = new Float32Array(((MAX_BODIES * (MAX_BODIES - 1)) / 2) * 2 * 3);
 linkGeo.setAttribute("position", new THREE.BufferAttribute(linkPos, 3));
@@ -348,7 +341,6 @@ const linkMesh = new THREE.LineSegments(linkGeo, linkMat);
 linkMesh.visible = false;
 scene.add(linkMesh);
 
-// Octree Viz
 const octreeGeo = new THREE.BufferGeometry();
 const octreePos = new Float32Array(60000);
 octreeGeo.setAttribute("position", new THREE.BufferAttribute(octreePos, 3));
@@ -401,7 +393,7 @@ function createExplosion(x, y, z, color) {
   explosions.push({ mesh: pSystem, vels: velocities, age: 0 });
 }
 
-// --- 5. OPTIMIZED BARNES-HUT OCTREE ---
+// --- 5. OPTIMIZED BARNES-HUT (POOLED) ---
 class Octant {
   constructor() {
     this.reset(0, 0, 0, 0);
@@ -419,11 +411,9 @@ class Octant {
     this.children = null;
   }
 }
-
 const OCTANT_POOL = [];
 let poolIdx = 0;
 for (let i = 0; i < 2000; i++) OCTANT_POOL.push(new Octant());
-
 function getOctant(x, y, z, size) {
   if (poolIdx >= OCTANT_POOL.length) OCTANT_POOL.push(new Octant());
   const node = OCTANT_POOL[poolIdx++];
@@ -454,7 +444,6 @@ Octant.prototype.insert = function (b) {
   this.comZ = (this.comZ * this.mass + b.z * b.mass) / totalM;
   this.mass = totalM;
 };
-
 Octant.prototype.subdivide = function () {
   this.children = [];
   const hs = this.size / 2;
@@ -472,31 +461,23 @@ Octant.prototype.subdivide = function () {
         );
       }
 };
-
 Octant.prototype.addToChildren = function (b) {
   const idx =
     (b.x >= this.x ? 1 : 0) + (b.y >= this.y ? 2 : 0) + (b.z >= this.z ? 4 : 0);
   this.children[idx].insert(b);
 };
-
-// OPTIMIZATION: Reduced function calls and improved math
 Octant.prototype.calcForce = function (b, acc, depth = 0) {
   if (this.mass === 0) return;
-
-  // Track max depth for performance stats
   if (depth > octreeDepth) octreeDepth = depth;
-
   const dx = this.comX - b.x;
   const dy = this.comY - b.y;
   const dz = this.comZ - b.z;
   const distSq = dx * dx + dy * dy + dz * dz;
-
   if (this.size / Math.sqrt(distSq) < THETA || !this.children) {
     if (distSq > 0.01) {
-      // OPTIMIZED: Skip sqrt for distance check
-      forceCalcsPerFrame++; // Track force calculations
+      forceCalcsPerFrame++;
       const invDist = 1.0 / Math.sqrt(distSq + currentSoftening);
-      const f = G * this.mass * invDist * invDist * invDist; // Combined division
+      const f = G * this.mass * invDist * invDist * invDist;
       acc.fx += f * dx;
       acc.fy += f * dy;
       acc.fz += f * dz;
@@ -505,17 +486,15 @@ Octant.prototype.calcForce = function (b, acc, depth = 0) {
     for (let c of this.children) c.calcForce(b, acc, depth + 1);
   }
 };
-
 Octant.prototype.collectBoxes = function (array, idxRef) {
   if (!this.children && this.mass === 0) return;
   const hs = this.size / 2;
   const x1 = this.x - hs,
-    x2 = this.x + hs;
-  const y1 = this.y - hs,
-    y2 = this.y + hs;
-  const z1 = this.z - hs,
+    x2 = this.x + hs,
+    y1 = this.y - hs,
+    y2 = this.y + hs,
+    z1 = this.z - hs,
     z2 = this.z + hs;
-
   const addLine = (ax, ay, az, bx, by, bz) => {
     if (idxRef.i >= 59900) return;
     array[idxRef.i++] = ax;
@@ -525,7 +504,6 @@ Octant.prototype.collectBoxes = function (array, idxRef) {
     array[idxRef.i++] = by;
     array[idxRef.i++] = bz;
   };
-
   addLine(x1, y1, z1, x2, y1, z1);
   addLine(x1, y2, z1, x2, y2, z1);
   addLine(x1, y1, z2, x2, y1, z2);
@@ -538,17 +516,14 @@ Octant.prototype.collectBoxes = function (array, idxRef) {
   addLine(x2, y1, z1, x2, y1, z2);
   addLine(x1, y2, z1, x1, y2, z2);
   addLine(x2, y2, z1, x2, y2, z2);
-
   if (this.children) for (let c of this.children) c.collectBoxes(array, idxRef);
 };
 
 // --- 6. LOGIC FUNCTIONS ---
-// OPTIMIZATION: Cached color objects
 const colorCache = new Map();
 function getStarColor(mass) {
   const key = Math.floor(mass * 10);
   if (colorCache.has(key)) return colorCache.get(key);
-
   const color = new THREE.Color();
   const cRed = new THREE.Color(0xff3300);
   const cYellow = new THREE.Color(0xffaa00);
@@ -557,21 +532,17 @@ function getStarColor(mass) {
   const cViolet = new THREE.Color(0xaa00ff);
   const cNeutron = new THREE.Color(0xffffff);
   const cBlack = new THREE.Color(0x050505);
-
-  if (mass < 100.0) {
-    color.lerpColors(cRed, cYellow, mass / 100.0);
-  } else if (mass < 300.0) {
+  if (mass < 100.0) color.lerpColors(cRed, cYellow, mass / 100.0);
+  else if (mass < 300.0)
     color.lerpColors(cYellow, cWhite, (mass - 100.0) / 200.0);
-  } else if (mass < 800.0) {
+  else if (mass < 800.0)
     color.lerpColors(cWhite, cCyan, (mass - 300.0) / 500.0);
-  } else if (mass < 2000.0) {
+  else if (mass < 2000.0)
     color.lerpColors(cCyan, cViolet, (mass - 800.0) / 1200.0);
-  } else if (mass < 4000.0) {
+  else if (mass < 4000.0)
     color.lerpColors(cViolet, cNeutron, (mass - 2000.0) / 2000.0);
-  } else {
+  else
     color.lerpColors(cNeutron, cBlack, Math.min((mass - 4000.0) / 2000.0, 1.0));
-  }
-
   const hex = color.getHex();
   colorCache.set(key, hex);
   return hex;
@@ -658,7 +629,7 @@ function createBody(x, y, z, vx, vy, vz, mass) {
     trailTimer: 0,
     prevPos: null,
   });
-  updateHUD();
+  updateHUDImmediate();
 }
 
 function clearScene() {
@@ -680,7 +651,7 @@ function clearScene() {
   bodies = [];
   collisionCount = 0;
   simTime = 0.0;
-  updateHUD();
+  updateHUDImmediate();
 }
 
 function loadPreset(key) {
@@ -697,7 +668,8 @@ function loadPreset(key) {
     createBody(b.x, b.y, b.z || 0, b.vx, b.vy, b.vz || 0, b.m || 1.0),
   );
   stabilityStatus = "BOUNDED";
-  updateHUD();
+  updateHUDImmediate();
+  updateButtonVisuals();
 }
 
 function setChaosMode() {
@@ -721,7 +693,7 @@ function setChaosMode() {
     const vz = (Math.random() - 0.5) * 0.5;
     createBody(x, y, z, vx, vy, vz, m);
   }
-  updateHUD();
+  updateHUDImmediate();
 }
 
 function addRandomBody() {
@@ -745,7 +717,7 @@ function addRandomBody() {
   createBody(x, y, z, vx, vy, vz, m);
 }
 
-// --- 7. UI CONSTRUCTION ---
+// --- 7. STATIC DOM INITIALIZATION (FIXES LAYOUT THRASHING) ---
 const hudContainer = document.createElement("div");
 hudContainer.id = "hud-container";
 hudContainer.className = "ui-element glass-panel";
@@ -757,9 +729,34 @@ Object.assign(hudContainer.style, {
   width: "240px",
   fontFamily: "'Rajdhani', sans-serif",
 });
+
+// Build the HTML ONCE
+hudContainer.innerHTML = `
+    <div style="font-size:16px; font-weight:700; color:#fff; margin-bottom:12px; letter-spacing:1px; display:flex; justify-content:space-between; align-items:center;">
+        <span>ORBITAL ENGINE</span>
+        <div id="ui-dot" style="width:8px; height:8px; border-radius:50%;"></div>
+    </div>
+    <div style="font-size:12px; color:#889; display:grid; grid-template-columns:1fr 1fr; gap:6px;">
+        <span>STABILITY</span> <span id="ui-stab" style="text-align:right;"></span>
+        <span>COUNT</span> <span id="ui-count" style="text-align:right; color:#fff"></span>
+        <span>LARGEST</span> <span id="ui-large" style="text-align:right;"></span>
+        <span>MERGES</span> <span id="ui-merge" style="text-align:right; color:#aab"></span>
+        <span>TIME</span> <span id="ui-time" style="text-align:right; color:#fff"></span>
+    </div>
+    <div style="margin-top:12px; padding-top:8px; border-top:1px solid rgba(255,255,255,0.1); font-size:11px; color:#667;">
+        APP // <span style="color:#00ffff">NBODY-SIMULATOR</span>
+    </div>
+`;
 document.body.appendChild(hudContainer);
 
-// Performance panel
+// Cache DOM Elements for zero-cost updates
+const uiDot = document.getElementById("ui-dot");
+const uiStab = document.getElementById("ui-stab");
+const uiCount = document.getElementById("ui-count");
+const uiLarge = document.getElementById("ui-large");
+const uiMerge = document.getElementById("ui-merge");
+const uiTime = document.getElementById("ui-time");
+
 const perfPanel = document.createElement("div");
 perfPanel.id = "perf-panel";
 perfPanel.className = "ui-element glass-panel";
@@ -771,7 +768,22 @@ Object.assign(perfPanel.style, {
   width: "200px",
   fontFamily: "'Rajdhani', sans-serif",
 });
+perfPanel.innerHTML = `
+    <div style="font-size:14px; font-weight:700; color:#fff; margin-bottom:10px; letter-spacing:1px;">PERFORMANCE</div>
+    <div style="font-size:11px; color:#889; display:grid; grid-template-columns:1fr auto; gap:6px;">
+        <span>FPS</span> <span id="perf-fps" style="text-align:right; font-weight:700;"></span>
+        <span>Physics</span> <span id="perf-phys" style="text-align:right; color:#aab"></span>
+        <span>Substeps</span> <span id="perf-sub" style="text-align:right; color:#aab"></span>
+        <span>Octree Depth</span> <span id="perf-oct" style="text-align:right; color:#aab"></span>
+        <span>Force Calcs</span> <span id="perf-frc" style="text-align:right; color:#aab"></span>
+    </div>
+`;
 document.body.appendChild(perfPanel);
+const pFps = document.getElementById("perf-fps");
+const pPhys = document.getElementById("perf-phys");
+const pSub = document.getElementById("perf-sub");
+const pOct = document.getElementById("perf-oct");
+const pFrc = document.getElementById("perf-frc");
 
 const deck = document.createElement("div");
 deck.id = "command-deck";
@@ -805,67 +817,42 @@ Object.assign(hintDiv.style, {
 hintDiv.innerText = "[SPACE] PAUSE  |  [H] HIDE";
 document.body.appendChild(hintDiv);
 
-// OPTIMIZATION: Debounced HUD update
-let hudUpdateScheduled = false;
-function updateHUD() {
-  if (hudUpdateScheduled) return;
-  hudUpdateScheduled = true;
-  requestAnimationFrame(() => {
-    hudUpdateScheduled = false;
-    _updateHUDImmediate();
-  });
-}
-
-function _updateHUDImmediate() {
+// LIGHTWEIGHT UPDATE FUNCTION (No innerHTML!)
+function updateHUDImmediate() {
   let maxMass = 0;
   if (bodies.length > 0)
     maxMass = bodies.reduce((prev, current) =>
       prev.mass > current.mass ? prev : current,
     ).mass;
-  let domColorHex = getStarColor(maxMass);
-  let domColorStr = "#" + new THREE.Color(domColorHex).getHexString();
-  let domClass = maxMass > 4000 ? "shine-text" : "";
-  const statusDotColor = paused ? "#ffaa00" : "#00ff88";
 
-  hudContainer.innerHTML = `
-        <div style="font-size:16px; font-weight:700; color:#fff; margin-bottom:12px; letter-spacing:1px; display:flex; justify-content:space-between; align-items:center;">
-            <span>ORBITAL ENGINE</span>
-            <div style="width:8px; height:8px; background:${statusDotColor}; border-radius:50%; box-shadow:0 0 8px ${statusDotColor}; animation: ${paused ? "none" : "pulse 2s infinite"};"></div>
-        </div>
-        <div style="font-size:12px; color:#889; display:grid; grid-template-columns:1fr 1fr; gap:6px;">
-            <span>STABILITY</span> <span style="text-align:right; color:#00ff88">${stabilityStatus}</span>
-            <span>COUNT</span> <span style="text-align:right; color:#fff">${bodies.length} / ${MAX_BODIES}</span>
-            <span>LARGEST</span> <span class="${domClass}" style="text-align:right; ${domClass ? "" : "color:" + domColorStr}">${maxMass.toFixed(1)} M☉</span>
-            <span>MERGES</span> <span style="text-align:right; color:#aab">${collisionCount}</span>
-            <span>TIME</span> <span style="text-align:right; color:#fff">T+${simTime.toFixed(1)} YR</span>
-        </div>
-        <div style="margin-top:12px; padding-top:8px; border-top:1px solid rgba(255,255,255,0.1); font-size:11px; color:#667;">
-            APP // <span style="color:#00ffff">NBODY-SIMULATOR</span>
-        </div>
-    `;
-  updateButtonVisuals();
+  uiDot.style.background = paused ? "#ffaa00" : "#00ff88";
+  uiDot.style.boxShadow = paused ? "0 0 8px #ffaa00" : "0 0 8px #00ff88";
+  uiDot.style.animation = paused ? "none" : "pulse 2s infinite";
+
+  uiStab.innerText = stabilityStatus;
+  uiStab.style.color = stabilityStatus === "BOUNDED" ? "#00ff88" : "#ffaa00";
+  uiCount.innerText = `${bodies.length} / ${MAX_BODIES}`;
+
+  uiLarge.innerText = `${maxMass.toFixed(1)} M☉`;
+  uiLarge.className = maxMass > 4000 ? "shine-text" : "";
+  if (maxMass <= 4000) {
+    uiLarge.style.color =
+      "#" + new THREE.Color(getStarColor(maxMass)).getHexString();
+  } else {
+    uiLarge.style.color = "#ffffff";
+  }
+
+  uiMerge.innerText = collisionCount;
+  uiTime.innerText = `T+${simTime.toFixed(1)} YR`;
 }
 
-// Performance panel update
 function updatePerfPanel() {
-  const fpsColor = fps >= 55 ? "#00ff88" : fps >= 30 ? "#ffaa00" : "#ff4444";
-  const physicsRate = physicsStepsPerSec.toFixed(0);
-
-  perfPanel.innerHTML = `
-        <div style="font-size:14px; font-weight:700; color:#fff; margin-bottom:10px; letter-spacing:1px;">
-            PERFORMANCE
-        </div>
-        <div style="font-size:11px; color:#889; display:grid; grid-template-columns:1fr auto; gap:6px;">
-            <span>FPS</span> <span style="text-align:right; color:${fpsColor}; font-weight:700;">${fps.toFixed(0)}</span>
-            <span>Physics</span> <span style="text-align:right; color:#aab">${physicsRate}/sec</span>
-            <span>Substeps</span> <span style="text-align:right; color:#aab">${physicsSubsteps}×</span>
-            <span>Octree Depth</span> <span style="text-align:right; color:#aab">${octreeDepth}</span>
-            <span>Force Calcs</span> <span style="text-align:right; color:#aab">${forceCalcsPerFrame}</span>
-        </div>
-        <div style="margin-top:10px; padding-top:8px; border-top:1px solid rgba(255,255,255,0.1); font-size:10px; color:#667;">
-            Time Scale: <span style="color:#00ffff">${(presetTimeScale * userTimeScale).toFixed(1)}×</span>
-        </div>
-    `;
+  pFps.innerText = fps.toFixed(0);
+  pFps.style.color = fps >= 55 ? "#00ff88" : fps >= 30 ? "#ffaa00" : "#ff4444";
+  pPhys.innerText = `${physicsStepsPerSec.toFixed(0)}/sec`;
+  pSub.innerText = `${physicsSubsteps}×`;
+  pOct.innerText = octreeDepth;
+  pFrc.innerText = forceCalcsPerFrame;
 }
 
 const grpPlay = document.createElement("div");
@@ -909,8 +896,6 @@ function createIconBtn(iconHtml, tooltip, onClick) {
     alignItems: "center",
     justifyContent: "center",
   });
-  btn.onmouseenter = () => (btn.style.background = "rgba(255,255,255,0.2)");
-  btn.onmouseleave = () => (btn.style.background = "rgba(255,255,255,0.05)");
   btn.onclick = (e) => {
     onClick();
     e.currentTarget.blur();
@@ -918,6 +903,7 @@ function createIconBtn(iconHtml, tooltip, onClick) {
   return btn;
 }
 
+// PERFORMANCE FIX: Class-based toggling
 function createToggle(text, tooltip, getter, setter) {
   const btn = document.createElement("button");
   btn.innerText = text;
@@ -935,16 +921,26 @@ function createToggle(text, tooltip, getter, setter) {
     height: "36px",
     fontFamily: "'Rajdhani'",
   });
+
   btn.onclick = (e) => {
     setter();
     updateButtonVisuals();
     e.currentTarget.blur();
   };
+
   btn.updateState = () => {
     const active = getter();
-    btn.style.borderColor = active ? "#00ffff" : "rgba(255,255,255,0.2)";
-    btn.style.color = active ? "#00ffff" : "#889";
-    btn.style.background = active ? "rgba(0,255,255,0.05)" : "transparent";
+    if (active) {
+      btn.classList.add("btn-active");
+      btn.style.borderColor = "";
+      btn.style.color = "";
+      btn.style.background = "";
+    } else {
+      btn.classList.remove("btn-active");
+      btn.style.borderColor = "rgba(255,255,255,0.2)";
+      btn.style.color = "#889";
+      btn.style.background = "transparent";
+    }
   };
   grpVis.appendChild(btn);
   return btn;
@@ -980,22 +976,67 @@ const tMerge = createToggle(
   "MERGE",
   "Merge Collisions",
   () => enableMerge,
-  toggleMerge,
+  () => {
+    enableMerge = !enableMerge;
+    updateHUDImmediate();
+  },
 );
 const tLock = createToggle(
   "LOCK",
   "Lock Camera",
   () => cameraLocked,
-  toggleLock,
+  () => {
+    cameraLocked = !cameraLocked;
+    if (cameraLocked && bodies.length > 0) {
+      let maxMass = -1;
+      let heaviest = null;
+      for (let b of bodies) {
+        if (b.mass > maxMass) {
+          maxMass = b.mass;
+          heaviest = b;
+        }
+      }
+      lockedBody = heaviest;
+    } else {
+      lockedBody = null;
+    }
+    updateHUDImmediate();
+  },
 );
 const tTrace = createToggle(
   "TRAIL",
   "Toggle Trails",
   () => traceMode,
-  toggleTrace,
+  () => {
+    traceMode = !traceMode;
+    if (!traceMode) {
+      for (let b of bodies) {
+        b.history = [];
+        b.trail.geometry.setDrawRange(0, 0);
+      }
+    }
+    updateHUDImmediate();
+  },
 );
-const tWeb = createToggle("WEB", "Gravity Web", () => showWeb, toggleWeb);
-const tVec = createToggle("VEC", "Vectors", () => showVectors, toggleVectors);
+const tWeb = createToggle(
+  "WEB",
+  "Gravity Web",
+  () => showWeb,
+  () => {
+    showWeb = !showWeb;
+    linkMesh.visible = showWeb;
+    updateHUDImmediate();
+  },
+);
+const tVec = createToggle(
+  "VEC",
+  "Vectors",
+  () => showVectors,
+  () => {
+    showVectors = !showVectors;
+    updateHUDImmediate();
+  },
+);
 const tTree = createToggle(
   "TREE",
   "Show Octree",
@@ -1005,7 +1046,18 @@ const tTree = createToggle(
     octreeMesh.visible = showOctree;
   },
 );
-const tCRT = createToggle("CRT", "CRT Effect", () => crtEnabled, toggleCRT);
+const tCRT = createToggle(
+  "CRT",
+  "CRT Effect",
+  () => crtEnabled,
+  () => {
+    crtEnabled = !crtEnabled;
+    const crt = document.getElementById("crt-overlay");
+    if (crtEnabled) crt.classList.add("crt-active");
+    else crt.classList.remove("crt-active");
+    updateHUDImmediate();
+  },
+);
 
 function updateButtonVisuals() {
   btnPause.innerHTML = paused ? I_PLAY : I_PAUSE;
@@ -1020,54 +1072,8 @@ function updateButtonVisuals() {
 
 function togglePause() {
   paused = !paused;
-  updateHUD();
-}
-function toggleMerge() {
-  enableMerge = !enableMerge;
-  updateHUD();
-}
-function toggleLock() {
-  cameraLocked = !cameraLocked;
-  if (cameraLocked && bodies.length > 0) {
-    let maxMass = -1;
-    let heaviest = null;
-    for (let b of bodies) {
-      if (b.mass > maxMass) {
-        maxMass = b.mass;
-        heaviest = b;
-      }
-    }
-    lockedBody = heaviest;
-  } else {
-    lockedBody = null;
-  }
-  updateHUD();
-}
-function toggleTrace() {
-  traceMode = !traceMode;
-  if (!traceMode) {
-    for (let b of bodies) {
-      b.history = [];
-      b.trail.geometry.setDrawRange(0, 0);
-    }
-  }
-  updateHUD();
-}
-function toggleWeb() {
-  showWeb = !showWeb;
-  linkMesh.visible = showWeb;
-  updateHUD();
-}
-function toggleVectors() {
-  showVectors = !showVectors;
-  updateHUD();
-}
-function toggleCRT() {
-  crtEnabled = !crtEnabled;
-  const crt = document.getElementById("crt-overlay");
-  if (crtEnabled) crt.classList.add("crt-active");
-  else crt.classList.remove("crt-active");
-  updateHUD();
+  updateHUDImmediate();
+  updateButtonVisuals();
 }
 function toggleCinematic() {
   cinematic = !cinematic;
@@ -1091,16 +1097,14 @@ const accBuffer = new Float32Array(MAX_BODIES * 3);
 
 function computeForces() {
   poolIdx = 0;
-  octreeDepth = 0; // Reset depth tracker
-  forceCalcsPerFrame = 0; // Reset force calc counter
-
+  octreeDepth = 0;
+  forceCalcsPerFrame = 0;
   let minX = Infinity,
     minY = Infinity,
     minZ = Infinity;
   let maxX = -Infinity,
     maxY = -Infinity,
     maxZ = -Infinity;
-
   bodies.forEach((b) => {
     if (b.x < minX) minX = b.x;
     if (b.x > maxX) maxX = b.x;
@@ -1109,12 +1113,10 @@ function computeForces() {
     if (b.z < minZ) minZ = b.z;
     if (b.z > maxZ) maxZ = b.z;
   });
-
   const size = Math.max(maxX - minX, maxY - minY, maxZ - minZ) * 1.5 + 10;
   const cx = (minX + maxX) / 2;
   const cy = (minY + maxY) / 2;
   const cz = (minZ + maxZ) / 2;
-
   const root = getOctant(cx, cy, cz, size);
   bodies.forEach((b) => root.insert(b));
 
@@ -1146,13 +1148,11 @@ function computeForces() {
       const dx = b2.x - b1.x;
       const dy = b2.y - b1.y;
       const dz = b2.z - b1.z;
-      const distSq = dx * dx + dy * dy + dz * dz; // OPTIMIZED: Skip sqrt
+      const distSq = dx * dx + dy * dy + dz * dz;
       const r1 = 0.08 * Math.sqrt(b1.mass);
       const r2 = 0.08 * Math.sqrt(b2.mass);
       const rSum = r1 + r2;
-
       if (enableMerge && distSq < rSum * rSum * 0.64) {
-        // 0.8^2 = 0.64
         const totalMass = b1.mass + b2.mass;
         b1.vx = (b1.vx * b1.mass + b2.vx * b2.mass) / totalMass;
         b1.vy = (b1.vy * b1.mass + b2.vy * b2.mass) / totalMass;
@@ -1161,7 +1161,6 @@ function computeForces() {
         b1.y = (b1.y * b1.mass + b2.y * b2.mass) / totalMass;
         b1.z = (b1.z * b1.mass + b2.z * b2.mass) / totalMass;
         b1.mass = totalMass;
-
         let newRad =
           totalMass > 4000
             ? Math.max(
@@ -1171,7 +1170,6 @@ function computeForces() {
             : 0.08 * Math.sqrt(totalMass);
         b1.mesh.scale.setScalar(newRad / 0.08);
         if (totalMass > 4000) b1.ring.scale.setScalar(newRad / 0.08);
-
         const newCol = getStarColor(totalMass);
         b1.mesh.material.color.setHex(newCol);
         const trailColor = totalMass > 4000 ? 0xffffff : newCol;
@@ -1189,7 +1187,6 @@ function computeForces() {
 function runPhysicsStep(dt) {
   if (bodies.length === 0) return;
   const removals = computeForces();
-
   if (removals.size > 0) {
     const sorted = Array.from(removals).sort((a, b) => b - a);
     for (let idx of sorted) {
@@ -1211,9 +1208,8 @@ function runPhysicsStep(dt) {
       }
       bodies.splice(idx, 1);
     }
-    updateHUD();
+    updateHUDImmediate();
   }
-
   for (let i = 0; i < bodies.length; i++) {
     const b = bodies[i];
     b.vx += accBuffer[i * 3] * 0.5 * dt;
@@ -1223,9 +1219,7 @@ function runPhysicsStep(dt) {
     b.y += b.vy * dt;
     b.z += b.vz * dt;
   }
-
   computeForces();
-
   for (let i = 0; i < bodies.length; i++) {
     const b = bodies[i];
     b.vx += accBuffer[i * 3] * 0.5 * dt;
@@ -1234,15 +1228,12 @@ function runPhysicsStep(dt) {
   }
 }
 
-// OPTIMIZATION: Throttled visual updates
 function updateVisuals() {
   let lineIdx = 0;
   const linePos = linkMesh.geometry.attributes.position.array;
-
   for (let i = 0; i < bodies.length; i++) {
     const b = bodies[i];
     b.mesh.position.set(b.x, b.y, b.z);
-
     if (b.ring) {
       b.ring.position.set(b.x, b.y, b.z);
       if (b.mass > 4000) {
@@ -1252,7 +1243,6 @@ function updateVisuals() {
         b.ring.material.opacity = 0.0;
       }
     }
-
     if (showWeb) {
       for (let j = i + 1; j < bodies.length; j++) {
         const b2 = bodies[j];
@@ -1260,7 +1250,6 @@ function updateVisuals() {
         const dy = b.y - b2.y;
         const dz = b.z - b2.z;
         const distSq = dx * dx + dy * dy + dz * dz;
-
         if (distSq < LINK_THRESHOLD * LINK_THRESHOLD) {
           linePos[lineIdx++] = b.x;
           linePos[lineIdx++] = b.y;
@@ -1271,14 +1260,12 @@ function updateVisuals() {
         }
       }
     }
-
     if (showVectors) {
       b.arrow.visible = true;
       const vx = b.vx,
         vy = b.vy,
         vz = b.vz;
       const vLenSq = vx * vx + vy * vy + vz * vz;
-
       if (vLenSq > 0.000001) {
         b.arrow.position.set(b.x, b.y, b.z);
         const vLen = Math.sqrt(vLenSq);
@@ -1291,12 +1278,9 @@ function updateVisuals() {
     } else {
       b.arrow.visible = false;
     }
-
-    // OPTIMIZATION: Only update trails when trace mode is on
     if (traceMode && !paused) {
       b.trailTimer = (b.trailTimer || 0) + 1;
       if (b.trailTimer % 3 === 0) {
-        // OPTIMIZED: Every 3 frames instead of 2
         b.history.push(b.x, b.y, b.z);
         if (b.history.length > TRAIL_LENGTH * 3) {
           b.history.shift();
@@ -1304,7 +1288,6 @@ function updateVisuals() {
           b.history.shift();
         }
       }
-
       const pos = b.trail.geometry.attributes.position.array;
       for (let k = 0; k < b.history.length; k++) pos[k] = b.history[k];
       b.trail.geometry.setDrawRange(0, b.history.length / 3);
@@ -1313,10 +1296,8 @@ function updateVisuals() {
       b.trail.geometry.setDrawRange(0, 0);
     }
   }
-
   linkMesh.geometry.setDrawRange(0, lineIdx / 3);
   linkMesh.geometry.attributes.position.needsUpdate = true;
-
   for (let i = explosions.length - 1; i >= 0; i--) {
     const ex = explosions[i];
     ex.age += 1;
@@ -1340,7 +1321,6 @@ function updateVisuals() {
     controls.autoRotate = true;
     controls.update();
   }
-
   if (bodies.length > 0 && cameraLocked && lockedBody) {
     const currentPos = getPooledVec3(lockedBody.x, lockedBody.y, lockedBody.z);
     if (lockedBody.prevPos) {
@@ -1351,10 +1331,9 @@ function updateVisuals() {
     controls.target.copy(currentPos);
   }
 
-  // OPTIMIZATION: Update stability every 30 frames
   if (!paused && frameCount % 30 === 0) {
     stabilityStatus = checkStability();
-    updateHUD();
+    updateHUDImmediate();
   }
 }
 
@@ -1371,45 +1350,33 @@ composer.addPass(bloom);
 function animate() {
   requestAnimationFrame(animate);
   frameCount++;
-
-  // FPS calculation
   const now = performance.now();
   const delta = now - lastFrameTime;
   lastFrameTime = now;
   frameTimeBuffer.push(delta);
   if (frameTimeBuffer.length > 60) frameTimeBuffer.shift();
-  const avgFrameTime =
-    frameTimeBuffer.reduce((a, b) => a + b, 0) / frameTimeBuffer.length;
-  fps = 1000 / avgFrameTime;
-
+  fps =
+    1000 /
+    (frameTimeBuffer.reduce((a, b) => a + b, 0) / frameTimeBuffer.length);
   if (!paused) {
     const totalDT = DT * presetTimeScale * userTimeScale;
     simTime += totalDT;
     const stepDt = totalDT / physicsSubsteps;
-
-    // Track physics steps per second
     physicsStepsPerSec = physicsSubsteps * fps;
-
     for (let i = 0; i < physicsSubsteps; i++) runPhysicsStep(stepDt);
   }
-
   updateVisuals();
-
-  // Update performance panel every 10 frames
-  if (frameCount % 10 === 0) {
-    updatePerfPanel();
-  }
-
+  if (frameCount % 10 === 0) updatePerfPanel();
   if (!controls.autoRotate && !cameraLocked) controls.update();
   composer.render();
 }
 
 loadPreset("figure8");
-updateHUD();
+updateHUDImmediate();
+updateButtonVisuals();
 updatePerfPanel();
 renderer.render(scene, camera);
 animate();
-
 window.addEventListener("resize", () => {
   camera.aspect = window.innerWidth / window.innerHeight;
   camera.updateProjectionMatrix();
