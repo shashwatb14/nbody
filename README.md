@@ -236,3 +236,5 @@ MIT License – See [LICENSE](LICENSE) for details
 - Figure-8 orbit discovered by Cris Moore (1993)
 - Three.js community for WebGL ecosystem
 - Barnes & Hut for the octree optimization algorithm (1986)
+
+– *Built with Gemini* –
